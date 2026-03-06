@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+
+OUTPUT=$(php -v)
+
+if echo "$OUTPUT" | grep -q "PHP 8\.2"; then
+    CURRENT=8.2
+elif echo "$OUTPUT" | grep -q "PHP 8\.5"; then
+    CURRENT=8.5
+elif echo "$OUTPUT" | grep -q "PHP 8\.4"; then
+    CURRENT=8.4
+elif echo "$OUTPUT" | grep -q "PHP 7\."; then
+    CURRENT=7
+elif echo "$OUTPUT" | grep -q "PHP 5\."; then
+    CURRENT=5
+else
+    echo "Versione PHP non riconosciuta"
+    exit 1
+fi
+
+if [ -n "$1" ]; then
+    case "$1" in
+        8)
+            TARGET=php8.2
+            ;;
+        84)
+            TARGET=php8.4
+            ;;
+        85)
+            TARGET=php8.5
+            ;;
+        7)
+            TARGET=php7.4
+            ;;
+        5)
+            TARGET=php5.6
+            ;;
+        *)
+            echo "Argomento non valido: usa 5, 7, 8, 84 o 85"
+            exit 1
+            ;;
+    esac
+else
+    case "$CURRENT" in
+        85)
+            TARGET=php8.4
+            ;;
+        84)
+            TARGET=php8.2
+            ;;
+        8)
+            TARGET=php7.4
+            ;;
+        7)
+            TARGET=php5.6
+            ;;
+        5)
+            TARGET=php8.5
+            ;;
+    esac
+fi
+
+sudo a2dismod php5.6 php7.4 php8.2 php8.4 php8.5 >> /dev/null 2>&1
+sudo a2enmod "$TARGET" >> /dev/null
+sudo update-alternatives --set php "/usr/bin/$TARGET" >> /dev/null
+
+sudo systemctl restart apache2
+
+echo "Cambiato in $TARGET"
+php -v | head -1
