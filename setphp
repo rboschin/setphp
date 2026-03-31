@@ -1,69 +1,129 @@
 #!/usr/bin/env bash
 
-OUTPUT=$(php -v)
+# Rileva tutte le versioni PHP installate
+detect_installed_versions() {
+    local versions=()
+    
+    # Cerca tutti i binari php disponibili
+    for binary in /usr/bin/php*; do
+        if [ -f "$binary" ] && [ -x "$binary" ]; then
+            # Estrae solo il numero di versione (es: php8.2 -> 8.2)
+            local version=$(basename "$binary" | sed 's/php//')
+            # Scarta le stringhe come "php" senza versione
+            if [[ "$version" =~ ^[0-9]+\.[0-9]+$ ]]; then
+                versions+=("$version")
+            fi
+        fi
+    done
+    
+    # Ordina le versioni
+    printf '%s\n' "${versions[@]}" | sort -V
+}
 
-if echo "$OUTPUT" | grep -q "PHP 8\.2"; then
-    CURRENT=8.2
-elif echo "$OUTPUT" | grep -q "PHP 8\.5"; then
-    CURRENT=8.5
-elif echo "$OUTPUT" | grep -q "PHP 8\.4"; then
-    CURRENT=8.4
-elif echo "$OUTPUT" | grep -q "PHP 7\."; then
-    CURRENT=7
-elif echo "$OUTPUT" | grep -q "PHP 5\."; then
-    CURRENT=5
-else
-    echo "Versione PHP non riconosciuta"
+# Converte formato argomento (83 -> 8.3, 74 -> 7.4)
+convert_version_format() {
+    local input=$1
+    local major=${input:0:1}
+    local minor=${input:1}
+    
+    if [[ "$minor" == "" ]]; then
+        # Se è solo una cifra, prova a trovare la versione principale
+        INSTALLED_VERSIONS=$(detect_installed_versions)
+        for v in $INSTALLED_VERSIONS; do
+            if [[ "$v" == "$major"* ]]; then
+                echo "$v"
+                return 0
+            fi
+        done
+        echo ""
+    else
+        echo "${major}.${minor}"
+    fi
+}
+
+# Ottiene la versione PHP attualmente in uso
+get_current_version() {
+    php -v 2>/dev/null | grep -oP 'PHP \K[0-9]+\.[0-9]+' | head -1
+}
+
+# Trova il prossimo elemento in array circolare
+get_next_version() {
+    local current=$1
+    local versions=$2
+    local found=0
+    local first=""
+    
+    for v in $versions; do
+        if [ -z "$first" ]; then
+            first=$v
+        fi
+        if [ "$found" -eq 1 ]; then
+            echo "$v"
+            return 0
+        fi
+        if [ "$v" = "$current" ]; then
+            found=1
+        fi
+    done
+    
+    # Se non trovato next, ritorna il primo
+    echo "$first"
+}
+
+# Programma principale
+INSTALLED_VERSIONS=$(detect_installed_versions)
+
+if [ -z "$INSTALLED_VERSIONS" ]; then
+    echo "Nessuna versione PHP installata trovata in /usr/bin/"
     exit 1
 fi
 
+CURRENT=$(get_current_version)
+
 if [ -n "$1" ]; then
-    case "$1" in
-        8)
-            TARGET=php8.2
-            ;;
-        84)
-            TARGET=php8.4
-            ;;
-        85)
-            TARGET=php8.5
-            ;;
-        7)
-            TARGET=php7.4
-            ;;
-        5)
-            TARGET=php5.6
-            ;;
-        *)
-            echo "Argomento non valido: usa 5, 7, 8, 84 o 85"
-            exit 1
-            ;;
-    esac
+    # Versione specificata come argomento
+    TARGET_VERSION=$(convert_version_format "$1")
+    
+    if [ -z "$TARGET_VERSION" ]; then
+        echo "Versione non valida: '$1'"
+        echo "Versioni disponibili:"
+        for v in $INSTALLED_VERSIONS; do
+            echo "  - php$v (uso: setphp ${v//./})"
+        done
+        exit 1
+    fi
+    
+    # Verifica che la versione sia nelle installate
+    if ! echo "$INSTALLED_VERSIONS" | grep -q "^$TARGET_VERSION$"; then
+        echo "Versione php$TARGET_VERSION non disponibile"
+        echo "Versioni disponibili:"
+        for v in $INSTALLED_VERSIONS; do
+            echo "  - php$v"
+        done
+        exit 1
+    fi
 else
-    case "$CURRENT" in
-        85)
-            TARGET=php8.4
-            ;;
-        84)
-            TARGET=php8.2
-            ;;
-        8)
-            TARGET=php7.4
-            ;;
-        7)
-            TARGET=php5.6
-            ;;
-        5)
-            TARGET=php8.5
-            ;;
-    esac
+    # Nessuna versione specificata: ruota alla prossima
+    TARGET_VERSION=$(get_next_version "$CURRENT" "$INSTALLED_VERSIONS")
 fi
 
-sudo a2dismod php5.6 php7.4 php8.2 php8.4 php8.5 >> /dev/null 2>&1
-sudo a2enmod "$TARGET" >> /dev/null
-sudo update-alternatives --set php "/usr/bin/$TARGET" >> /dev/null
+TARGET="php${TARGET_VERSION}"
 
-sudo systemctl restart apache2
+# Disabilita tutti i moduli Apache e abilita il nuovo
+if command -v a2dismod &> /dev/null; then
+    for v in $INSTALLED_VERSIONS; do
+        sudo a2dismod "php${v}" >> /dev/null 2>&1
+    done
+    sudo a2enmod "$TARGET" >> /dev/null 2>&1
+fi
 
-echo "Cambiato in $TARGET"
+# Aggiorna l'alternativa di sistema
+sudo update-alternatives --set php "/usr/bin/$TARGET" >> /dev/null 2>&1
+
+# Riavvia Apache se disponibile
+if command -v systemctl &> /dev/null; then
+    sudo systemctl restart apache2 >> /dev/null 2>&1
+fi
+
+echo "Versione cambiata in $TARGET"
 php -v | head -1
